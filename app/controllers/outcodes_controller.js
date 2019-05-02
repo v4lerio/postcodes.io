@@ -1,14 +1,14 @@
 "use strict";
 
-var logger = require("commonlog-bunyan");
-var async = require("async");
-var S = require("string");
-var Outcode = require("../models/outcode");
-var path = require("path");
-var env = process.env.NODE_ENV || "development";
-var defaults = require(path.join(__dirname, "../../config/config.js"))(env).defaults;
+const Outcode = require("../models/outcode");
+const {
+  OutcodeNotFoundError,
+  InvalidLimitError,
+  InvalidRadiusError,
+  InvalidGeolocationError,
+} = require("../lib/errors.js");
 
-exports.query = function (request, response, next) {
+exports.query = (request, response, next) => {
 	if (request.query.latitude && request.query.longitude) {
 		request.params.latitude = request.query.latitude;
 		request.params.longitude = request.query.longitude;
@@ -23,113 +23,64 @@ exports.query = function (request, response, next) {
 		return;
 	}
 
-	response.jsonApiResponse = {
-		status: 400,
-		error: "Invalid longitude/latitude submitted"
-	};
-	return next();
+  return next(new InvalidGeolocationError());
 };
 
-exports.showOutcode = function (request, response, next) {
-	var outcode = request.params.outcode;
+exports.showOutcode = (request, response, next) => {
+	const { outcode } = request.params;
 
-	Outcode.find(outcode, function (error, result) {
+	Outcode.find(outcode, (error, result) => {
 		if (error) return next(error);
-		if (!result) {
-			response.jsonApiResponse = {
-				status: 404,
-				result: null
-			};
-		} else {
-			response.jsonApiResponse = {
-				status: 200,
-				result: Outcode.toJson(result)
-			};
-		}
+		if (!result) return next(new OutcodeNotFoundError());
+    response.jsonApiResponse = {
+      status: 200,
+      result: Outcode.toJson(result)
+    };
 		return next();
 	});
 };
 
-exports.nearest = function (request, response, next) {
-	var outcode = request.params.outcode;
+exports.nearest = (request, response, next) => {
+	const { outcode } = request.params;
 
-	Outcode.find(outcode, function (error, outcode) {
-		if (error) {
-			return next(error);
-		}
-
-		if (outcode) {
-			request.params.longitude = outcode.longitude;
-			request.params.latitude = outcode.latitude;
-			return nearestOutcodes(request, response, next);
-		} else {
-			response.jsonApiResponse = {
-				status: 404,
-				error: "Outcode not found"
-			};
-			return next();
-		}
-	})
+	Outcode.find(outcode, (error, outcode) => {
+		if (error) return next(error);
+    if (!outcode) return next(new OutcodeNotFoundError());
+    request.params.longitude = outcode.longitude;
+    request.params.latitude = outcode.latitude;
+    return nearestOutcodes(request, response, next);
+	});
 };
 
 function nearestOutcodes (request, response, next) {
-	var longitude = parseFloat(request.params.longitude),
-			latitude = parseFloat(request.params.latitude),
-			limit, radius, params = {};
+	const longitude = parseFloat(request.params.longitude);
+	const latitude = parseFloat(request.params.latitude);
+	let limit, radius; 
+	const params = {};
 
-	if (isNaN(longitude) || isNaN(latitude)) {
-		response.jsonApiResponse = {
-			status: 400,
-			error: "Invalid longitude/latitude submitted"
-		};
-		return next();
-	} else {
-		params.longitude = longitude;
-		params.latitude = latitude;
-	}
+	if (isNaN(longitude) || isNaN(latitude)) return next(new InvalidGeolocationError());
+  params.longitude = longitude;
+  params.latitude = latitude;
 
 	if (request.query.limit) {
 		limit = parseInt(request.query.limit, 10);
-		if (isNaN(limit)) {
-			response.jsonApiResponse = {
-				status: 400,
-				error: "Invalid result limit submitted"
-			};
-			return next();
-		} else {
-			params.limit = limit;
-		}
+		if (isNaN(limit)) return next(new InvalidLimitError());
+    params.limit = limit;
 	}
 
 	if (request.query.radius) {
 		radius = parseFloat(request.query.radius);
-		if (isNaN(radius)) {
-			response.jsonApiResponse = {
-				status: 400,
-				error: "Invalid lookup radius submitted"
-			};
-			return next();
-		} else {
-			params.radius = radius;
-		}
+		if (isNaN(radius)) return next(new InvalidRadiusError());
+    params.radius = radius;
 	}
 
-	Outcode.nearest(params, function (error, results) {
+	Outcode.nearest(params, (error, results) => {
 		if (error) return next(error);
-		if (!results) {
-			response.jsonApiResponse = {
-				status: 200,
-				result: null
-			};
-			return next();
-		} else {
-			response.jsonApiResponse = {
-				status: 200,
-				result: results.map(function (outcode) {
-					return Outcode.toJson(outcode);
-				})
-			};
-			return next();
-		}
+    response.jsonApiResponse = {
+      status: 200,
+      result: !!results ? results.map(outcode => Outcode.toJson(outcode)) : null,
+    };
+    return next();
 	});
 }
+

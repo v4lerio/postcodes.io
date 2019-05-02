@@ -1,15 +1,16 @@
-var path = require("path");
-var app = require(path.join(__dirname, "../server"));
-var request = require("supertest");
-var assert = require("chai").assert;
-var helper = require(path.join(__dirname + "/helper"));
+"use strict";
 
-describe("Outcodes routes", function () {
+const app = require("../server");
+const request = require("supertest");
+const assert = require("chai").assert;
+const helper = require("./helper");
+
+describe("Outcodes routes", () => {
 	before(function (done) {
 		this.timeout(0);
-		helper.clearPostcodeDb(function (error, result) {
+		helper.clearPostcodeDb((error, result) => {
 			if (error) return done(error);
-			helper.seedPostcodeDb(function (error, result) {
+			helper.seedPostcodeDb((error, result) => {
 				if (error) return done(error);
 				done();
 			});
@@ -35,7 +36,7 @@ describe("Outcodes routes", function () {
 				assert.equal(response.body.result.outcode, testOutcode);
 				assert.isUndefined(response.body.result.id);
 				assert.isUndefined(response.body.result.location);
-				helper.testOutcode(response.body.result);
+				helper.isOutcodeObject(response.body.result);
 				done();
 			});
 		});
@@ -50,7 +51,7 @@ describe("Outcodes routes", function () {
 				if (error) return done(error);
 				assert.equal(response.body.status, 200);
 				assert.equal(response.body.result.outcode, testOutcode);
-				helper.testOutcode(response.body.result);
+				helper.isOutcodeObject(response.body.result);
 				done();
 			});
 		});
@@ -65,7 +66,7 @@ describe("Outcodes routes", function () {
 				if (error) return done(error);
 				assert.equal(response.body.status, 200);
 				assert.equal(response.body.result.outcode, testOutcode);
-				helper.testOutcode(response.body.result);
+				helper.isOutcodeObject(response.body.result);
 				done();
 			});
 		});
@@ -79,7 +80,8 @@ describe("Outcodes routes", function () {
 			.end(function (error, response) {
 				if (error) return done(error);
 				assert.equal(response.body.status, 404);
-				assert.isNull(response.body.result);
+				assert.isUndefined(response.body.result);
+        assert.equal(response.body.error, "Outcode not found");
 				done();
 			});
 		});

@@ -1,6 +1,4 @@
-var path = require("path");
+"use strict";
 
-module.exports = function (config) {
-	var Base = require(path.join(__dirname, "../app/models"));
-	return Base.connect(config);
-}
+// Instantiate pg client pool by loading base model
+module.exports = () => require("../app/models/base");

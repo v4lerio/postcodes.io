@@ -1,125 +1,119 @@
-var path = require("path");
-var bsyslog = require("bunyan-syslog");
-var rootPath = path.join(__dirname, '../');
-var defaults = require("./defaults");
+"use strict";
 
-var config = {
+/**
+ * config.js
+ *
+ * This file exports default configurations across test, development and
+ * production environments. If you wish to modify configuration, please use
+ * environment variables or the .env file
+ *
+ * Nota Bene
+ *
+ * Whereas previously (<10.1), config.js served as an editable configuration
+ * file, post 10.1, configuration should be set via environment variables
+ * or the `.env` file - with environment variables taking precedence
+ */
 
-	/*
-	* Development Environment (Default) Configuration Object ($ node server.js)
-	* 
-	* This is the default environment. i.e. it's the environment config when the
-	* server is booted up with `$ node server.js`
-	*
-	* The only action you need to take here is to add your Postgres credentials.
-	* You also need to create the database yourself and pass in the database name.
-	* Note that the specified user needs to be a superuser for the import process
-	* (`$ onsImport`). You may reduce user privileges after you've imported 
-	* postcode data
-	*
-	*/ 
+// Load .env into environment variables
+require("dotenv").config();
 
-	development : {
-		env : "development",
-		root: rootPath,
-		googleAnalyticsKey: "",
-		postgres: {
-			user: "postcodesio",
-			password: "password",
-			database: "postcodesiodb",	// Database name
-			host: "localhost",
-			port: 5432
-		},
-		log : {
-			name : "postcodes.io",
-			streams: [{
-				stream: process.stdout
-			}]
-		}
-	},
+const { join } = require("path");
+const defaults = require("./defaults");
+const defaultEnv = process.env.NODE_ENV || "development";
 
-	/*
-	* Test Environment (Optional, if you want to npm test)
-	* 
-	* Do not use the same Postgres credentials for the test database as your production
-	* or development environments as this environment needs to reset the postcode table
-	*
-	*/ 
+const config = {
+  development: {
+    googleAnalyticsKey: "",
+    postgres: {
+      user: "postcodesio",
+      password: "password",
+      database: "postcodesiodb", // Database name
+      host: "localhost",
+      port: 5432,
+    },
+    log: {
+      name: "postcodes.io",
+      file: "stdout",
+    },
+    port: 8000,
+  },
 
-	test: {
-		env : "test",
-		root: rootPath,
-		googleAnalyticsKey: "",
-		postgres: {
-			user: "postcodesio",
-			password: "password",
-			database: "postcodeio_testing",
-			host: "localhost",
-			port: 5432
-		},
-		log: {
-			name : "postcodes.io",
-			streams: [{
-				path : path.join(rootPath, "/logs/test.log")	
-			}]
-		}
-	},
+  test: {
+    googleAnalyticsKey: "",
+    postgres: {
+      user: "postcodesio",
+      password: "password",
+      database: "postcodeio_testing",
+      host: "localhost",
+      port: 5432,
+    },
+    log: {
+      name: "postcodes.io",
+      file: join(__dirname, "../test.log"),
+    },
+    port: 8000,
+  },
 
-	/*
-	* Production Environment Configuration Object
-	* 
-	* This is the production environment. `$ NODE_ENV=production node server.js`
-	*
-	*/ 
-
-	production : {
-		env : "production",
-		root: rootPath,
-		googleAnalyticsKey: "",
-		postgres: {
-			user: "postcodesio",
-			password: "password",
-			database: "postcodesiodb",
-			host: "localhost",
-			port: 5432
-		},
-		log : {
-			name : "postcodes.io",
-			streams: [{
-				path : path.join(rootPath, "/logs/production.log")	
-			}]
-		}
-	}
+  production: {
+    googleAnalyticsKey: "",
+    postgres: {
+      user: "postcodesio",
+      password: "password",
+      database: "postcodesiodb",
+      host: "localhost",
+      port: 5432,
+    },
+    log: {
+      name: "postcodes.io",
+      file: "perf", // Use pino.extreme
+    },
+    port: 8000,
+  },
 };
 
-module.exports = function (environment) {
-	var cfg = config[environment] || config["development"];
+module.exports = env => {
+  const environment = env || defaultEnv;
 
-	cfg.defaults = defaults;
+  const cfg = config[environment];
 
-	if (process.env.MAPBOX_PUBLIC_KEY || !cfg.mapBoxKey) {
-		cfg.mapBoxKey = process.env.MAPBOX_PUBLIC_KEY || "";	
-	}
+  cfg.defaults = defaults;
 
-	if (process.env.POSTGRES_USER) {
-		cfg.postgres.user = process.env.POSTGRES_USER;
-	}
+  const {
+    PORT,
+    MAPBOX_PUBLIC_KEY,
+    POSTGRES_USER,
+    POSTGRES_PASSWORD,
+    POSTGRES_DATABASE,
+    POSTGRES_HOST,
+    POSTGRES_PORT,
+    LOG_NAME,
+    GA_KEY,
+    LOG_DESTINATION,
+    PROMETHEUS_USERNAME,
+    PROMETHEUS_PASSWORD,
+  } = process.env;
 
-	if (process.env.POSTGRES_PASSWORD) {
-		cfg.postgres.password = process.env.POSTGRES_PASSWORD;
-	}
+  if (PORT !== undefined) cfg.port = PORT;
 
-	if (process.env.POSTGRES_DATABASE) {
-		cfg.postgres.database = process.env.POSTGRES_DATABASE;
-	}	
+  if (MAPBOX_PUBLIC_KEY !== undefined || !cfg.mapBoxKey) {
+    cfg.mapBoxKey = process.env.MAPBOX_PUBLIC_KEY || "";
+  }
 
-	if (process.env.POSTGRES_HOST) {
-		cfg.postgres.host = process.env.POSTGRES_HOST;
-	}
+  if (POSTGRES_USER !== undefined) cfg.postgres.user = POSTGRES_USER;
+  if (POSTGRES_PASSWORD !== undefined)
+    cfg.postgres.password = POSTGRES_PASSWORD;
+  if (POSTGRES_DATABASE !== undefined)
+    cfg.postgres.database = POSTGRES_DATABASE;
+  if (POSTGRES_HOST !== undefined) cfg.postgres.host = POSTGRES_HOST;
+  if (POSTGRES_PORT !== undefined) cfg.postgres.port = POSTGRES_PORT;
 
-	if (process.env.POSTGRES_PORT) {
-		cfg.postgres.port = process.env.POSTGRES_PORT;
-	}
+  if (LOG_NAME !== undefined) cfg.log.name = LOG_NAME;
+  if (LOG_DESTINATION !== undefined) cfg.log.file = LOG_DESTINATION;
 
-	return cfg;
+  if (GA_KEY !== undefined) cfg.googleAnalyticsKey = GA_KEY;
+
+  if (PROMETHEUS_USERNAME !== undefined) cfg.prometheusUsername = PROMETHEUS_USERNAME;
+  if (PROMETHEUS_PASSWORD !== undefined) cfg.prometheusPassword = PROMETHEUS_PASSWORD;
+
+  return cfg;
 };

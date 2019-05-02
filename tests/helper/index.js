@@ -1,250 +1,226 @@
-var	csv = require("csv");
-var util = require("util");
-var path = require("path");
-var async = require("async");
-var OSPoint = require("ospoint");
-var assert = require("chai").assert;
-var randomString = require("random-string");
-var rootPath = path.join(__dirname, "../../");
-var env = process.env.NODE_ENV || "development";
-var NO_RELOAD_DB = !!process.env.NO_RELOAD_DB;
-var Base = require(path.join(rootPath, "app/models"));
-var config = require(path.join(rootPath + "/config/config"))(env);
-var seedPostcodePath = path.join(rootPath, "tests/seed/postcode.csv");
+"use strict";
+
+const { inherits } = require("util");
+const { join } = require("path");
+const async = require("async");
+const { assert } = require("chai");
+const randomString = require("random-string");
+const configFactory = require("../../config/config");
+const config = configFactory();
+const AttributeBaseSuite = require("./attribute_base.suite.js");
+
+const postcodesioApplication = cfg => require("../../app")(cfg || config);
 
 // Load models
-var AttributeBase = require(path.join(rootPath, "app/models/attribute_base"));
-var Postcode = require(path.join(rootPath, "app/models/postcode"));
-var District = require(path.join(rootPath, "app/models/district"));
-var Parish = require(path.join(rootPath, "app/models/parish"));
-var County = require(path.join(rootPath, "app/models/county"));
-var Ccg = require(path.join(rootPath, "app/models/ccg"));
-var Nuts = require(path.join(rootPath, "app/models/nuts"));
-var Ward = require(path.join(rootPath, "app/models/ward"));
-var Outcode = require(path.join(rootPath, "app/models/outcode"));
+const {
+  Base,
+  AttributeBase,
+  Postcode,
+  TerminatedPostcode,
+} = require("../../app/models/index.js");
 
-var CSV_INDEX = {
-	postcode: 2,
-	northings: 10,
-	eastings: 9
+const CSV_INDEX = Object.freeze({
+  postcode: 2,
+  northings: 10,
+  eastings: 9,
+});
+
+// Infers columns schema from columnData
+const inferSchemaData = columnData => {
+  const columnName = columnData.column_name;
+  const collationName = columnData.collation_name;
+
+  let dataType = columnData.data_type;
+  if (columnName === "id") {
+    dataType = "SERIAL PRIMARY KEY";
+  }
+  if (dataType === "USER-DEFINED" && columnName === "location") {
+    dataType = "GEOGRAPHY(Point, 4326)";
+  }
+  if (dataType === "USER-DEFINED" && columnName === "bounding_polygon") {
+    dataType = "GEOGRAPHY(Polygon, 4326)";
+  }
+  if (dataType === "integer" || dataType === "double precision") {
+    dataType = dataType.toUpperCase();
+  }
+
+  if (dataType === "character varying") {
+    dataType = `VARCHAR(${columnData.character_maximum_length})`;
+  }
+
+  if (collationName) {
+    dataType = `${dataType} COLLATE "${collationName}"`;
+  }
+  return [columnName, dataType];
+};
+
+// sort index definition objects by their collumn names
+// used to assert equality between infered index definitions and real index definitions
+const sortByIndexColumns = (a, b) => {
+  if (a.column === b.column) {
+    return Object.keys(b).length - Object.keys(a).length;
+  } else {
+    return a.column < b.column ? -1 : 1;
+  }
+};
+
+// infers expected definition of javascript object that defines creation of an index
+// for #createIndexes method
+const inferIndexInfo = indexDef => {
+  const impliedIndex = {};
+
+  if (indexDef.search("UNIQUE") !== -1) {
+    impliedIndex.unique = true; //not specified unless is unique
+  }
+
+  const strippedDef = indexDef.replace(/.*USING\s/, "");
+  const indexType = strippedDef.match(/\w*/)[0];
+
+  if (indexType !== "btree") {
+    impliedIndex.type = indexType.toUpperCase(); //not specified unless NOT a btree;
+  }
+
+  const indexInfo = strippedDef.match(/\(.*\)/)[0].slice(1, -1);
+
+  const splittedIndexInfo = indexInfo.split(" ");
+
+  impliedIndex.column = splittedIndexInfo[0]; //contains name of an indexed collumn
+
+  if (splittedIndexInfo.length === 2) {
+    impliedIndex.opClass = splittedIndexInfo[1]; // if two words, second word specifies
+    // operation class, which is always
+    // specified explicitly
+  }
+  return impliedIndex;
 };
 
 // Location with nearby postcodes to be used in lonlat test requests
+const locationWithNearbyPostcodes = function(callback) {
+  const postcodeWithNearbyPostcodes = "AB14 0LP";
+  Postcode.find(postcodeWithNearbyPostcodes, function(error, result) {
+    if (error) return callback(error, null);
+    return callback(null, result);
+  });
+};
 
+function getCustomRelation() {
+  const relationName = randomString({
+      length: 8,
+      numeric: false,
+      letters: true,
+      special: false,
+    }),
+    schema = {
+      id: "serial PRIMARY KEY",
+      somefield: "varchar(255)",
+    };
 
-var locationWithNearbyPostcodes = function (callback) {
-	var postcodeWithNearbyPostcodes = "AB14 0LP";
-	Postcode.find(postcodeWithNearbyPostcodes, function (error, result) {
-		if (error) return callback(error, null);
-		return callback(null, result);
-	});
+  function CustomRelation() {
+    Base.call(this, relationName, schema);
+  }
+
+  inherits(CustomRelation, Base);
+
+  return new CustomRelation();
 }
 
-function getCustomRelation () {
-	var relationName = randomString({
-			  length: 8,
-			  numeric: false,
-			  letters: true,
-			  special: false
-			}),
-			schema = {
-				"id" : "serial PRIMARY KEY",
-				"somefield": "varchar(255)"
-			};
+//Generates a random integer from 1 to max inclusive
+const getRandom = max => Math.ceil(Math.random() * max);
 
-	function CustomRelation() {
-		Base.Base.call(this, relationName, schema);
-	}
+const QueryTerminatedPostcode = `
+	SELECT
+		postcode
+	FROM
+		terminated_postcodes LIMIT 1
+	OFFSET $1
+`;
 
-	util.inherits(CustomRelation, Base.Base);
-
-	return new CustomRelation();
+function randomTerminatedPostcode(callback) {
+  const randomId = getRandom(8); // 9 terminated postcodes in the
+  // testing database
+  TerminatedPostcode._query(
+    QueryTerminatedPostcode,
+    [randomId],
+    (error, result) => {
+      if (error) return callback(error, null);
+      if (result.rows.length === 0) return callback(null, null);
+      callback(null, result.rows[0]);
+    }
+  );
 }
 
-function seedPostcodeDb (callback) {
-	if (NO_RELOAD_DB) {
-		return callback(null);
-	}
+const randomPostcode = callback => {
+  Postcode.random((error, { postcode }) => {
+    callback(error, postcode);
+  });
+};
 
-	var instructions = [];
-	instructions.push(function (callback) {
-		Postcode._setupTable(seedPostcodePath, callback);
-	});
-	instructions.push(District._setupTable.bind(District));
-	instructions.push(Parish._setupTable.bind(Parish));
-	instructions.push(Nuts._setupTable.bind(Nuts));
-	instructions.push(County._setupTable.bind(County));
-	instructions.push(Ccg._setupTable.bind(Ccg));
-	instructions.push(Ward._setupTable.bind(Ward));
-	instructions.push(Outcode._setupTable.bind(Outcode));
+const randomOutcode = callback => {
+  return Postcode.random((error, { outcode }) => {
+    callback(error, outcode);
+  });
+};
 
-	async.series(instructions, callback);
-}
+const randomLocation = callback => {
+  return Postcode.random((error, { longitude, latitude }) => {
+    callback(error, { longitude, latitude });
+  });
+};
 
-function clearPostcodeDb(callback, force) {
-	if (NO_RELOAD_DB) {
-		return callback(null);
-	}
-	Postcode._destroyRelation(callback);
-}
-
-var getRandom = function (max) {
-	return Math.floor(Math.random() * max);
-}
-
-function randomPostcode(callback) {
-	Postcode.random(function (error, result) {
-		callback(error, result.postcode);
-	});
-}
-
-function randomOutcode(callback) {
-	return Postcode.random(function (error, result) {
-		callback(error, result.outcode)
-	});
-}
-
-function randomLocation(callback) {
-	return Postcode.random(function (error, result) {
-		callback(error, {
-			longitude: result.longitude,
-			latitude: result.latitude
-		})
-	});
-}
-
-function lookupRandomPostcode(callback) {
-	Postcode.random(function (error, result) {
-		if (error) {
-			throw error;
-		}
-		callback(result);
-	});
-}
-
-function jsonpResponseBody (response) {
-	// Rough regex to extract json object
-	var result = response.text.match(/\(.*\)/);
-	return JSON.parse(result[0].slice(1, result[0].length - 1));
-}
-
-function allowsCORS (response) {
-	assert.equal(response.headers["access-control-allow-origin"], "*");
-}
-
-function validCorsOptions(response) {
-	assert.equal(response.headers["access-control-allow-origin"], "*");
-	assert.equal(response.headers["access-control-allow-methods"], "GET,POST,OPTIONS");
-	assert.equal(response.headers["access-control-allow-headers"], "X-Requested-With, Content-Type, Accept, Origin");	
-}
-
-function isPostcodeObject(o) {
-	var nonProperties = ["id", "location", "pc_compact", "admin_county_id", 
-		"admin_district_id", "parish_id", "ccg_id", "admin_ward_id", "nuts_id", "nuts_code"];
-
-	nonProperties.forEach(function (prop) {
-		assert.notProperty(o, prop);
-	});
-
-	var properties = ["nhs_ha","country","quality","postcode","eastings","latitude",
-		"northings","longitude","admin_ward","admin_county","admin_district",
-		"parliamentary_constituency","european_electoral_region","parish","lsoa",
-		"msoa","nuts","ccg","primary_care_trust","incode","outcode", "codes"];
-
-	properties.forEach(function (prop) {
-		assert.property(o, prop);
-	});
-
-	var codeProperties = ["admin_county", "admin_district", "parish", "ccg", "admin_ward", "nuts"];
-
-	codeProperties.forEach(function (prop) {
-		assert.property(o, prop);
-	});
-}
-
-function isRawPostcodeObject(o) {
-	var properties = ["id", "nhs_ha", "country", "quality", "postcode", "eastings", "latitude", "location", 
-	"northings",  "longitude", "pc_compact", "admin_ward", "admin_county", "admin_district",
-	"parliamentary_constituency", "european_electoral_region", "parish", "lsoa", "msoa",
-	"nuts", "ccg", "primary_care_trust", "incode", "outcode", "admin_district", "nuts_id", "nuts_code",
-	"admin_county_id", "admin_district_id", "parish_id", "ccg_id", "admin_ward_id"];
-
-	properties.forEach(function (prop) {
-		assert.property(o, prop);
-	});
-}
-
-function isOutcodeObject(o) {
-	var nonProperties = ["id", "location"];
-
-	nonProperties.forEach(function (prop) {
-		assert.notProperty(o, prop);
-	});
-
-	var properties = ["eastings", "latitude", "northings", "longitude", 
-	"admin_ward", "admin_county", "admin_district", "parish", "outcode"];
-
-	properties.forEach(function (prop) {
-		assert.property(o, prop);
-	});	
-}
-
-function isRawOutcodeObject(o) {
-	var properties = ["id", "eastings", "latitude", "location", "northings", 
-	"longitude", "admin_ward", "admin_county", "admin_district", "parish", "outcode"];
-
-	properties.forEach(function (prop) {
-		assert.property(o, prop);
-	});	
-}
-
-function testOutcode(o) {
-	var properties = ["longitude", "latitude", "northings", "eastings", "admin_ward", 
-	"admin_district", "admin_county", "parish"];
-
-	properties.forEach(function (prop) {
-		assert.property(o, prop);
-	});
-}
+const lookupRandomPostcode = callback => {
+  Postcode.random((error, result) => {
+    if (error) {
+      throw error;
+    }
+    callback(result);
+  });
+};
 
 module.exports = {
-	// Data	
-	config: config,
-	rootPath: rootPath,
+  // Data
+  configFactory,
+  config,
 
-	// Methods
-	allowsCORS: allowsCORS,
-	testOutcode: testOutcode,
-	randomOutcode: randomOutcode,
-	randomPostcode: randomPostcode,
-	randomLocation: randomLocation,
-	seedPostcodeDb: seedPostcodeDb,
-	clearPostcodeDb: clearPostcodeDb,
-	isOutcodeObject: isOutcodeObject,
-	validCorsOptions: validCorsOptions,
-	isPostcodeObject: isPostcodeObject,
-	jsonpResponseBody: jsonpResponseBody,
-	getCustomRelation: getCustomRelation,
-	isRawOutcodeObject: isRawOutcodeObject,
-	isRawPostcodeObject: isRawPostcodeObject, 
-	lookupRandomPostcode: lookupRandomPostcode,
-	locationWithNearbyPostcodes: locationWithNearbyPostcodes,
+  // Methods
+  ...require("./setup.js"),
 
-	// Models
-	Base: Base,
-	AttributeBase: AttributeBase,
-	Postcode: Postcode,
-	District: District,
-	Parish: Parish,
-	County: County,
-	Ccg: Ccg,
-	Nuts: Nuts,
-	Ward: Ward,
-	Outcode: Outcode,
+  // HTTP Helpers
+  ...require("./http.js"),
 
-	seedPaths: {
-		postcodes: path.join(rootPath, "/tests/seed/postcodes.csv"),
-		customRelation: path.join(rootPath, "/tests/seed/customRelation.csv")
-	}
-}
+  removeDiacritics: require("./remove_diacritics"),
+  inferIndexInfo,
+  inferSchemaData,
+  sortByIndexColumns,
+  randomOutcode,
+  randomPostcode,
+  randomTerminatedPostcode,
+  randomLocation,
+  getCustomRelation,
+  lookupRandomPostcode,
+  locationWithNearbyPostcodes,
 
+  // Type checking methods
+  ...require("./type_checking.js"),
+
+  // PG helper methods
+  ...require("./pg.js"),
+
+  // Test suites
+  AttributeBaseSuite,
+
+  // Libs
+  unaccent: require("../../app/lib/unaccent.js"),
+  errors: require("../../app/lib/errors.js"),
+  string: require("../../app/lib/string.js"),
+  timeout: require("../../app/lib/timeout.js"),
+
+  // Load in models
+  ...require("../../app/models/index.js"),
+
+  seedPaths: {
+    customRelation: join(__dirname, "../seed/customRelation.csv"),
+  },
+
+  // Export pcio application factory
+  postcodesioApplication,
+};

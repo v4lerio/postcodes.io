@@ -13,7 +13,7 @@ describe("Malformed request", () => {
 			process.version
 			.replace(/[a-z]/gi, "")
 			.split(".")[0]
-		);
+		, 10);
 
 		if (majorVersion < 6) return done(); // Skip if node < 6.x
 

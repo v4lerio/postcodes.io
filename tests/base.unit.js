@@ -1,23 +1,17 @@
-var assert = require("chai").assert,
-		helper = require(__dirname + "/helper");
+"use strict";
 
-var Base = helper.Base;
+const helper = require("./helper");
+const { assert } = require("chai");
+const {
+  Base,
+	extractOnspdVal
+} = require("../app/models/base.js");
 
 describe("Base model", function () {
-	describe("Connect", function () {
-		it ("should connect to postgresql database", function (done) {
-			var pg = Base.connect(helper.config, function (error, client, returnClient) {
-				if (error) return done(error);
-				assert.isNotNull(client);
-				returnClient();
-				done();
-			});
-		});
-	});
 	describe("Base model instance methods", function () {
 		describe("#_query", function () {
 			it ("should execute a query", function (done) {
-				var base = new Base.Base();
+				const base = new Base();
 				base._query("SELECT * FROM pg_tables", function (error, result) {
 					if (error) return done(error);
 					assert.isArray(result.rows);
@@ -114,22 +108,23 @@ describe("Base model", function () {
 		});
 	});
 
-	describe("#_csvSeed", function (done) {
-		var customRelation;
+	describe("#_csvSeed", done => {
+		let customRelation;
 
-		before(function (done) {
+		before(done => {
 			customRelation = helper.getCustomRelation();
 			customRelation._createRelation(done);
 		});
 
-		after(function (done) {
-			customRelation._destroyRelation(done);
-		});
+		after(done => customRelation._destroyRelation(done));
 
-		it ("should seed the relation table with data", function (done) {
-			customRelation._csvSeed(helper.seedPaths.customRelation, "someField", null, function (error, result) {
+		it ("should seed the relation table with data", done => {
+			customRelation._csvSeed({
+				filepath: helper.seedPaths.customRelation, 
+				columns: "someField"
+			}, (error, result) => {
 				if (error) return done(error);
-				customRelation.all(function (error, data) {
+				customRelation.all((error, data) => {
 					if (error) return done(error);
 					var hasLorem = data.rows.some(function (elem) {
 						return elem.somefield === "Lorem";
@@ -144,13 +139,16 @@ describe("Base model", function () {
 	describe("#clear", function (done) {
 		var customRelation;
 
-		before(function (done) {
+		before(done => {
 			customRelation = helper.getCustomRelation();
-			customRelation._createRelation(function (error, result) {
+			customRelation._createRelation((error, result) => {
 				if (error) return done(error);
-				customRelation._csvSeed(helper.seedPaths.customRelation, "someField", null, function (error, result) {
+				customRelation._csvSeed({
+					filepath: helper.seedPaths.customRelation, 
+					columns: "someField"
+				}, (error, result) => {
 					if (error) return done(error);
-					customRelation.all(function (error, data) {
+					customRelation.all((error, data) => {
 						if (error) return done(error);
 						assert.isTrue(data.rows.length > 0);
 						done();
@@ -159,9 +157,7 @@ describe("Base model", function () {
 			});
 		});
 
-		after(function (done) {
-			customRelation._destroyRelation(done);
-		});
+		after(done => customRelation._destroyRelation(done));
 
 		it ("should clear the table", function (done) {
 			customRelation.clear(function (error, result) {
@@ -172,6 +168,15 @@ describe("Base model", function () {
 					done();
 				});
 			});
+		});
+	});
+
+	describe("extractOnspdVal", () => {
+		it ("extracts correct ONSPD val from row", () => {
+			const row = ["foo", "bar", "baz"];
+			assert.equal(extractOnspdVal(row, "pcd"), "foo");
+			assert.equal(extractOnspdVal(row, "pcd2"), "bar");
+			assert.equal(extractOnspdVal(row, "pcds"), "baz");
 		});
 	});
 });
